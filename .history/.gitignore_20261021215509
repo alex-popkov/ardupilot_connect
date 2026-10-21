@@ -1,9 +1,0 @@
-build/
-cmake-build-*/
-.vscode/
-.idea/
-*.o
-*.elf
-*.hex
-*.bin
-.env

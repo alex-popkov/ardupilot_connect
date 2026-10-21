@@ -8,38 +8,37 @@
 #include <cstring>       // strerror
 #include <stdexcept>
 #include <string>
+#include <poll.h>
 #include "port_controllers/udp_server.hpp"
 
-UdpServer::UdpServer(uint16_t port, const std::string& bindAddr = "0.0.0.0")
+UdpServer::UdpServer(uint16_t port, const std::string& bindAddr)
 {
-   // Створюємо UDP-сокет: AF_INET = IPv4, SOCK_DGRAM = датаграми (UDP)
+   // 1. Створюємо UDP-сокет: AF_INET = IPv4, SOCK_DGRAM = датаграми (UDP)
   fd = ::socket(AF_INET, SOCK_DGRAM, 0);
   if (fd < 0) {
     throw std::runtime_error(std::string("socket: ") + std::strerror(errno));
   }
 
-  dest.sin_family = AF_INET;
-  dest.sin_port = htons(port);
-  if (inet_pton(AF_INET, host.c_str(), &dest.sin_addr) != 1) {
-    close(fd);
-    throw std::runtime_error("Bad UDP host: " + host + "\n");
-  }
-
-   // Локальна адреса, на якій слухаємо
-  sockaddr_in addr{};
+  // 2. Локальна адреса, на якій слухаємо
+  sockaddr_in addr{};                         // {} обнуляє всю структуру
   addr.sin_family = AF_INET;
   addr.sin_port = htons(port);                // порядок байтів хоста -> мережевий
-  addr.sin_addr.s_addr = htonl(INADDR_ANY);   // 0.0.0.0, усі інтерфейси
+  if (::inet_pton(AF_INET, bindAddr.c_str(), &addr.sin_addr) != 1) {
+    // inet_pton НЕ виставляє errno при поганому рядку (повертає 0),
+    ::close(fd);
+    fd = -1;
+    throw std::runtime_error("bad bind address: " + bindAddr);
+  }
 
   if (::bind(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) < 0) {
     failAndClose("bind");
   }
 
-  // Неблокуючий режим: recvfrom() повертає одразу, навіть якщо даних немає
+  // 3. Неблокуючий режим: recvfrom() повертає одразу, навіть якщо даних немає
   const int flags = ::fcntl(fd, F_GETFL, 0);
   if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
     failAndClose("fcntl");
-  }  
+  } 
 }
 
 UdpServer::~UdpServer()
@@ -49,14 +48,85 @@ UdpServer::~UdpServer()
   }
 }
 
-auto UdpServer::send(const uint8_t* buf, size_t byteCount) -> voida
+bool UdpServer::send(const uint8_t* buf, size_t byteCount)
 {
-  ::sendto(fd, buf, byteCount, 0, (const sockaddr*)&dest, sizeof(dest));
+  if (!hasPeer) {
+     return false;
+  }
+
+  const ssize_t n = ::sendto(
+    fd, 
+    buf, 
+    byteCount, 
+    0,
+    reinterpret_cast<const sockaddr*>(&peer),
+    sizeof(peer)
+  );
+
+  if (n < 0) {
+    const int err = errno;
+    if (err == EAGAIN || err == EWOULDBLOCK || err == EINTR) {
+      
+      return false;
+    }
+
+    throw std::runtime_error(std::string("sendt?o: ") + std::strerror(err));
+  }
+
+  return true;
 }
 
-auto UdpServer::recv(uint8_t* buf, size_t maxByteCount) -> int
+size_t UdpServer::recv(uint8_t* buf, size_t maxByteCount)
 {
-  return ::recvfrom(fd, buf, maxByteCount, 0, nullptr, nullptr);
+  sockaddr_in from{};
+  socklen_t fromLen = sizeof(from);
+
+  const ssize_t n = ::recvfrom(
+    fd, 
+    buf, 
+    maxByteCount, 
+    0, 
+    reinterpret_cast<sockaddr*>(&from), 
+    &fromLen
+  );
+
+  if (n < 0) {
+    const int err = errno;
+    if (err == EAGAIN || err == EWOULDBLOCK || err == EINTR) {
+      
+      return 0;
+    }
+
+    throw std::runtime_error(std::string("recvfrom: ") + std::strerror(err));
+  }
+
+  if (n > 0) {
+    peer = from;
+    hasPeer = true;
+  }
+
+  return static_cast<size_t>(n);
+}
+
+bool UdpServer::waitReadable(int timeoutMs) {
+  pollfd pfd{fd, POLLIN, 0};
+  const int n = ::poll(&pfd, 1, timeoutMs);
+
+  if (n == 0 ) {
+    return false;
+  }
+
+  if (n < 0) {
+    const int err = errno;
+    if (err == EINTR) {
+      
+      return false;
+    }
+
+    throw std::runtime_error(std::string("poll: ") + std::strerror(err));
+  }
+
+  return (pfd.revents & POLLIN) != 0;
 }
 
 // private helper: закрити fd і кинути виключення з текстом помилки

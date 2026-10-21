@@ -12,11 +12,12 @@ public:
   UdpServer& operator=(const UdpServer&) = delete;
   UdpServer& operator=(UdpServer&&) = delete;
 
-  void send(const uint8_t* buf, size_t byteCount;
-  void recv(uint8_t* buf, size_t max);
+  bool send(const uint8_t* buf, size_t byteCount);
+  size_t recv(uint8_t* buf, size_t maxByteCount);
+  bool waitReadable(int timeoutMs);
 
 private:
-  void UdpServer::failAndClose(const char* what)
+  [[noreturn]] void failAndClose(const char* what);
 
   int fd{-1};
   sockaddr_in peer{};
