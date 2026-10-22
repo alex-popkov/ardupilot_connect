@@ -14,12 +14,12 @@ public:
 
   bool send(const uint8_t* buf, size_t byteCount);
   size_t recv(uint8_t* buf, size_t maxByteCount);
-  bool waitReadable(int timeoutMs);
+  bool wait_readable(int timeoutMs);
 
 private:
-  [[noreturn]] void failAndClose(const char* what);
+  [[noreturn]] void fail_and_close(const char* what);
 
   int fd{-1};
   sockaddr_in peer{};
-  bool hasPeer{false};
+  bool has_peer{false};
 };

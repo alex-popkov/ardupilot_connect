@@ -15,14 +15,13 @@ endif()
 
 add_library(mav_listener_lib
     src/port_controllers/udp_server.cpp
+    src/port_controllers/mavlink_parser.cpp
 )
 
 add_executable(mav_listener src/main.cpp)
 
-target_include_directories(mav_listener SYSTEM PRIVATE ${MAVLINK_DIR})
-target_include_directories(mav_listener_lib PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include 
-)
+target_include_directories(mav_listener_lib SYSTEM PUBLIC ${MAVLINK_DIR})
+target_include_directories(mav_listener_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(mav_listener PRIVATE mav_listener_lib)
 target_compile_options(mav_listener PRIVATE -Wall -Wextra -pedantic)
 target_compile_options(mav_listener_lib PRIVATE -Wall -Wextra -pedantic)

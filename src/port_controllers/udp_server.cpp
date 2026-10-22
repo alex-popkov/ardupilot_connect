@@ -31,13 +31,13 @@ UdpServer::UdpServer(uint16_t port, const std::string& bindAddr)
   }
 
   if (::bind(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) < 0) {
-    failAndClose("bind");
+    fail_and_close("bind");
   }
 
   // 3. Неблокуючий режим: recvfrom() повертає одразу, навіть якщо даних немає
   const int flags = ::fcntl(fd, F_GETFL, 0);
   if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
-    failAndClose("fcntl");
+    fail_and_close("fcntl");
   } 
 }
 
@@ -50,7 +50,7 @@ UdpServer::~UdpServer()
 
 bool UdpServer::send(const uint8_t* buf, size_t byteCount)
 {
-  if (!hasPeer) {
+  if (!has_peer) {
      return false;
   }
 
@@ -102,13 +102,13 @@ size_t UdpServer::recv(uint8_t* buf, size_t maxByteCount)
 
   if (n > 0) {
     peer = from;
-    hasPeer = true;
+    has_peer = true;
   }
 
   return static_cast<size_t>(n);
 }
 
-bool UdpServer::waitReadable(int timeoutMs) {
+bool UdpServer::wait_readable(int timeoutMs) {
   pollfd pfd{fd, POLLIN, 0};
   const int n = ::poll(&pfd, 1, timeoutMs);
 
@@ -130,7 +130,7 @@ bool UdpServer::waitReadable(int timeoutMs) {
 }
 
 // private helper: закрити fd і кинути виключення з текстом помилки
-[[noreturn]] void UdpServer::failAndClose(const char* what)
+[[noreturn]] void UdpServer::fail_and_close(const char* what)
 {
   const int err = errno;   // зберегти ДО close(), бо close може перезаписати errno
   ::close(fd);
