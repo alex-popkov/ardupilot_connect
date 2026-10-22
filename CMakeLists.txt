@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(mav_listener CXX)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,7 +20,9 @@ add_library(mav_listener_lib
 add_executable(mav_listener src/main.cpp)
 
 target_include_directories(mav_listener SYSTEM PRIVATE ${MAVLINK_DIR})
-target_include_directories(mav_listener_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(mav_listener_lib PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include 
+)
 target_link_libraries(mav_listener PRIVATE mav_listener_lib)
 target_compile_options(mav_listener PRIVATE -Wall -Wextra -pedantic)
 target_compile_options(mav_listener_lib PRIVATE -Wall -Wextra -pedantic)
