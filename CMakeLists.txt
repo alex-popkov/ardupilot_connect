@@ -14,8 +14,9 @@ if(NOT EXISTS "${MAVLINK_DIR}/ardupilotmega/mavlink.h")
 endif()
 
 add_library(mav_listener_lib
-    src/port_controllers/udp_server.cpp
-    src/port_controllers/mavlink_parser.cpp
+    src/transport/udp_server.cpp
+    src/transport/mavlink_parser.cpp
+    src/transport/mavlink_sender.cpp
 )
 
 add_executable(mav_listener src/main.cpp)
