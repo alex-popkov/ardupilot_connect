@@ -1,7 +1,7 @@
 #include "transport/udp_server.hpp"
-#include "transport/mavlink_parser.hpp"
-#include "transport/mavlink_sender.hpp"
-#include "mavlink_utils/mavlink_names.hpp"
+#include "mavlink/mavlink_parser.hpp"
+#include "mavlink/mavlink_sender.hpp"
+#include "mavlink/mavlink_names.hpp"
 #include <cstdio> 
 #include <cstdint>
 
@@ -92,8 +92,8 @@ int main () {
                 if (now >= nextHeartbeat) {
                     sender.sendHeartbeat();
                     nextHeartbeat += std::chrono::seconds(1);
-                    if (now > nextHeartbeat) {            // відстали більше ніж на період —
-                        nextHeartbeat = now + std::chrono::seconds(1);   // не доганяємо, а починаємо заново
+                    if (now > nextHeartbeat) {
+                        nextHeartbeat = now + std::chrono::seconds(1);
                     }
                 }
             }

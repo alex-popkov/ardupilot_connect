@@ -13,18 +13,18 @@
 
 UdpServer::UdpServer(uint16_t port, const std::string& bindAddr)
 {
-   // 1. Створюємо UDP-сокет: AF_INET = IPv4, SOCK_DGRAM = датаграми (UDP)
+   // 1. create UDP-socket: AF_INET = IPv4, SOCK_DGRAM = datagrams (UDP)
   fd = ::socket(AF_INET, SOCK_DGRAM, 0);
   if (fd < 0) {
     throw std::runtime_error(std::string("socket: ") + std::strerror(errno));
   }
 
-  // 2. Локальна адреса, на якій слухаємо
-  sockaddr_in addr{};                         // {} обнуляє всю структуру
+  // 2. Local address
+  sockaddr_in addr{};
   addr.sin_family = AF_INET;
-  addr.sin_port = htons(port);                // порядок байтів хоста -> мережевий
+  addr.sin_port = htons(port);                // order of bytes (endianes)
   if (::inet_pton(AF_INET, bindAddr.c_str(), &addr.sin_addr) != 1) {
-    // inet_pton НЕ виставляє errno при поганому рядку (повертає 0),
+    // inet_pton return 0 in case of error,
     ::close(fd);
     fd = -1;
     throw std::runtime_error("bad bind address: " + bindAddr);
@@ -34,7 +34,7 @@ UdpServer::UdpServer(uint16_t port, const std::string& bindAddr)
     fail_and_close("bind");
   }
 
-  // 3. Неблокуючий режим: recvfrom() повертає одразу, навіть якщо даних немає
+  // 3. non blocking recvfrom() 
   const int flags = ::fcntl(fd, F_GETFL, 0);
   if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
     fail_and_close("fcntl");
@@ -129,10 +129,10 @@ bool UdpServer::wait_readable(int timeoutMs) {
   return (pfd.revents & POLLIN) != 0;
 }
 
-// private helper: закрити fd і кинути виключення з текстом помилки
+// private helper: close fd and throw error
 [[noreturn]] void UdpServer::fail_and_close(const char* what)
 {
-  const int err = errno;   // зберегти ДО close(), бо close може перезаписати errno
+  const int err = errno;   // save before close(), closecan rewrite errno
   ::close(fd);
   fd = -1;
   throw std::runtime_error(std::string(what) + ": " + std::strerror(err));
