@@ -1,8 +1,8 @@
-#include "mavlink_utils/mavlink_names.hpp"
+#include "mavlink/mavlink_utils.hpp"
 
 #include <ardupilotmega/mavlink.h>
 
-namespace mavlink_names {
+namespace mavlink_utils {
 
 const char* mavResultName(uint8_t result)
 {

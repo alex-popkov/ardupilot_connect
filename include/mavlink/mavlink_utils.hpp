@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
  
-namespace mavlink_names {
+namespace mavlink_utils {
  
  
 const char* mavResultName(uint8_t result);      // COMMAND_ACK.result      (MAV_RESULT)

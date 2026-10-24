@@ -1,7 +1,7 @@
 #include "transport/udp_server.hpp"
 #include "mavlink/mavlink_parser.hpp"
 #include "mavlink/mavlink_sender.hpp"
-#include "mavlink/mavlink_names.hpp"
+#include "vehicle/telemetry_handler.hpp"
 #include <cstdio> 
 #include <cstdint>
 
@@ -11,55 +11,10 @@ int main () {
     try { 
         UdpServer server(SERVER_PORT);
         uint8_t buf[2048];
-        uint8_t vehicleSys;
-        uint8_t vehicleComp;
-        bool vehicleKnown = false; 
+        TelemetryHandler telemetry_handler{SENDER_SYSID};
 
         MavlinkParser::Handler msg_handler = [&](const mavlink_message_t& msg){
-            switch (msg.msgid){
-                case MAVLINK_MSG_ID_HEARTBEAT:
-                    {
-                         mavlink_heartbeat_t hb;
-                        mavlink_msg_heartbeat_decode(&msg, &hb);
-                        if (hb.autopilot == MAV_AUTOPILOT_INVALID) {
-                            break;
-                        }
-
-                        if (!vehicleKnown) {
-                            vehicleSys = msg.sysid;
-                            vehicleComp = msg.compid;
-                            vehicleKnown = true;
-                        }
-                        const bool armed = (hb.base_mode & MAV_MODE_FLAG_SAFETY_ARMED) != 0;
-
-                        std::printf("mode %-9s | %-8s | status %s\n",
-                            mavlink_names::copterModeName(hb.custom_mode),
-                            armed ? "ARMED" : "DISARMED",
-                            mavlink_names::mavStateName(hb.system_status)
-                        );
-
-                        break;
-                    }
-                   
-                case MAVLINK_MSG_ID_COMMAND_ACK:
-                    {
-                       mavlink_command_ack_t command_ack;
-                        mavlink_msg_command_ack_decode(&msg, &command_ack);
-
-                        if (command_ack.target_system != SENDER_SYSID) { 
-                            break;
-                        }
-
-                        std::printf("ACK command %u result %s\n",
-                            static_cast<unsigned>(command_ack.command),
-                            mavlink_names::mavResultName(command_ack.result)
-                        );
-                        break; 
-                    }
-                        
-                default:
-                    break;
-            }
+           telemetry_handler.onMessage(msg);
         };
 
         MavlinkParser parser{MAVLINK_COMM_0, std::move(msg_handler)};
@@ -77,10 +32,10 @@ int main () {
                 }
 
                 //send command guided
-                if (!guidedSent && vehicleKnown) {
+                if (!guidedSent && telemetry_handler.state().known) {
                     guidedSent = sender.sendCommandLong(
-                        vehicleSys,
-                        vehicleComp,
+                        telemetry_handler.state().sysid,
+                        telemetry_handler.state().compid,
                         MAV_CMD_DO_SET_MODE,
                         {MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, COPTER_MODE_GUIDED, 0, 0, 0, 0, 0},
                         0

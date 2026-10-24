@@ -8,13 +8,14 @@ struct VehicleState {
     uint8_t compid = 0;
 
     // HEARTBEAT
-    uint32_t customMode = 0;
+    uint32_t custom_mode = 0;
     bool armed = false;
-    uint8_t systemStatus = 0;
-    std::chrono::steady_clock::time_point lastHeartbeat{};
+    uint8_t system_status = 0;
+    std::chrono::steady_clock::time_point last_heartbeat{};
 
     // GLOBAL_POSITION_INT
-    bool hasPosition = false;
+    bool has_position = false;
     double lat = 0, lon = 0;       // degrees
-    double relAltM = 0;            // metres
+    double rel_alt_m = 0;            // metres
+    double climb_rate_mps = 0;
 };
