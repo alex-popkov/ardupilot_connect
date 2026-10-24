@@ -17,6 +17,7 @@ add_library(mav_listener_lib
     src/transport/udp_server.cpp
     src/transport/mavlink_parser.cpp
     src/transport/mavlink_sender.cpp
+    src/mavlink_utils/mavlink_names.cpp
 )
 
 add_executable(mav_listener src/main.cpp)
