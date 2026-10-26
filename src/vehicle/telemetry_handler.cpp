@@ -2,9 +2,6 @@
 #include "mavlink/mavlink_utils.hpp"
 #include <cstdio>
 
-TelemetryHandler::TelemetryHandler(uint8_t sender_sys_id) : sender_sys_id_(sender_sys_id)
-{}
-
 void TelemetryHandler::onMessage(const mavlink_message_t& msg)
 {
     // Until the autopilot is found, only heartbeats matter (they tell us its address)
@@ -23,17 +20,17 @@ void TelemetryHandler::onMessage(const mavlink_message_t& msg)
                 onHeartbeat(msg);
                 break;
             }
-            
-        case MAVLINK_MSG_ID_COMMAND_ACK:
-            {
-                onCommandAck(msg);
-                break; 
-            }
 
         case MAVLINK_MSG_ID_GLOBAL_POSITION_INT: 
             {
                 onGlobalPositionInt(msg);
                 break; 
+            }
+
+        case MAVLINK_MSG_ID_STATUSTEXT:
+            {
+                onStatusText(msg);
+                break;
             }
                 
         default:
@@ -72,21 +69,6 @@ void TelemetryHandler::onHeartbeat(const mavlink_message_t& msg)
     );
 }
 
-void TelemetryHandler::onCommandAck(const mavlink_message_t& msg)
-{
-    mavlink_command_ack_t command_ack;
-    mavlink_msg_command_ack_decode(&msg, &command_ack);
-
-    if (command_ack.target_system != sender_sys_id_) { 
-        return;
-    }
-
-    std::printf("ACK command %u result %s\n",
-        static_cast<unsigned>(command_ack.command),
-        mavlink_utils::mavResultName(command_ack.result)
-    );
-}
-
 void TelemetryHandler::onGlobalPositionInt(const mavlink_message_t& msg)
 {
     mavlink_global_position_int_t pos;
@@ -97,4 +79,15 @@ void TelemetryHandler::onGlobalPositionInt(const mavlink_message_t& msg)
     state_.rel_alt_m = pos.relative_alt / 1000.0; // mm -> m
     state_.has_position = true;
     state_.climb_rate_mps = -pos.vz / 100.0; 
+}
+
+void TelemetryHandler::onStatusText(const mavlink_message_t& msg)
+{
+    mavlink_statustext_t st;
+    mavlink_msg_statustext_decode(&msg, &st);
+
+    // text is char[50] and is NOT guaranteed to be null-terminated
+    std::printf("[autopilot sev=%s] %.*s\n",
+        mavlink_utils::mavSeverityName(st.severity),
+        static_cast<int>(sizeof(st.text)), st.text);
 }

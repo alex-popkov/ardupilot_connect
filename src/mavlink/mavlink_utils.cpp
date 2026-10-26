@@ -71,4 +71,19 @@ const char* copterModeName(uint32_t customMode)
     }
 }
 
+const char* mavSeverityName(uint8_t severity)
+{
+     switch (severity) {
+        case MAV_SEVERITY_EMERGENCY: return "EMERGENCY";
+        case MAV_SEVERITY_ALERT:     return "ALERT";
+        case MAV_SEVERITY_CRITICAL:  return "CRITICAL";
+        case MAV_SEVERITY_ERROR:     return "ERROR";
+        case MAV_SEVERITY_WARNING:   return "WARNING";
+        case MAV_SEVERITY_NOTICE:    return "NOTICE";
+        case MAV_SEVERITY_INFO:      return "INFO";
+        case MAV_SEVERITY_DEBUG:     return "DEBUG";
+        default:                     return "UNKNOWN";
+    }
+};
+
 }  // namespace mavlink_names
