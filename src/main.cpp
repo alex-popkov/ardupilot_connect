@@ -7,15 +7,15 @@
 #include <cstdint>
 
 int main () {
-    const uint16_t SERVER_PORT = 14551;
-    const uint8_t SENDER_SYSID = 254;
-    const float TAKEOFF_ALT_M = 10.0f;
+    const uint16_t kServerPort = 14551;
+    const uint8_t kSenderSysid = 254;
+    const float kTakeoffAltM = 10.0f;
     try { 
-        UdpServer server(SERVER_PORT);
+        UdpServer server(kServerPort);
         uint8_t buf[2048];
         TelemetryHandler telemetry_handler;
-        MavlinkSender sender{server, SENDER_SYSID, MAV_COMP_ID_MISSIONPLANNER, MAVLINK_COMM_0};
-        FlightSequence flight_fequence{sender, telemetry_handler.state(), SENDER_SYSID, TAKEOFF_ALT_M};
+        MavlinkSender sender{server, kSenderSysid, MAV_COMP_ID_MISSIONPLANNER, MAVLINK_COMM_0};
+        FlightSequence flight_fequence{sender, telemetry_handler.state(), kSenderSysid, kTakeoffAltM};
 
         MavlinkParser::OnMessage msg_handler = [&](const mavlink_message_t& msg){
            telemetry_handler.onMessage(msg);
@@ -60,3 +60,5 @@ int main () {
         return 1; 
     }
 }
+
+

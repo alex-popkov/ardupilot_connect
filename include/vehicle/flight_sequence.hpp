@@ -36,10 +36,23 @@ public:
     State state() const { return state_; }
 
 private:
+    struct ActiveCommand {
+        enum class Phase {
+            AwaitingAck,    // sent, waiting for COMMAND_ACK until deadline
+            WaitingRetry,   // rejected temporarily, resend at deadline
+        };
+        uint16_t command;
+        std::array<float, 7> params;
+        Phase phase;
+        std::chrono::steady_clock::time_point deadline;
+        uint8_t attempts;
+    };
+
     static std::optional<FlightSequence::State> nextStateOnAck(State curr_state);
     void setState(State next);   // the only place where state_ changes
     void onCommandAck(const mavlink_command_ack_t& ack);
     bool sendCommand(uint16_t command, const std::array<float, 7>& params);
+    void checkCommandTimeout(std::chrono::steady_clock::time_point now);
 
     MavlinkSender& sender_;
     const VehicleState& vehicle_;   // read-only view, TelemetryHandler owns updates
@@ -47,5 +60,6 @@ private:
     float takeoff_alt_m_;
 
     State state_ = State::WaitVehicle;
-    std::optional<uint16_t> pending_command_;   // command we are waiting an ACK for
+    std::optional<ActiveCommand> active_command_;
+    std::optional<std::chrono::steady_clock::time_point> state_deadline_; 
 };

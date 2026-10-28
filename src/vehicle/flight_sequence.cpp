@@ -2,6 +2,8 @@
 #include "mavlink/mavlink_utils.hpp"
 
 namespace {
+constexpr auto kAckTimeout = std::chrono::seconds(1);
+constexpr uint8_t kMaxAttempts = 3;
 
 const char* stateName(FlightSequence::State s)
 {
@@ -18,7 +20,23 @@ const char* stateName(FlightSequence::State s)
     }
     return "UNKNOWN";  // unreachable if all enumerators are handled
 }
+    // How long a state may last before the sequence gives up (none = unlimited)
+std::optional<std::chrono::seconds> stateTimeout(FlightSequence::State s)
+{
+    using State = FlightSequence::State;
+    switch (s) {
+        case State::SetGuided:   return std::chrono::seconds(5);
+        case State::Arming:      return std::chrono::seconds(60);
+        case State::Takeoff:     return std::chrono::seconds(5);
+        case State::Climbing:    return std::chrono::seconds(30);
+        case State::Landing:     return std::chrono::seconds(60);
 
+        case State::Done:
+        case State::Failed:
+        case State::WaitVehicle: 
+            return std::nullopt;
+    }
+};
 }
 
 FlightSequence::FlightSequence(
@@ -40,8 +58,10 @@ void FlightSequence::onMessage(const mavlink_message_t& msg)
     onCommandAck(ack);
 }
 
-void FlightSequence::tick(std::chrono::steady_clock::time_point /*now*/)
+void FlightSequence::tick(std::chrono::steady_clock::time_point now)
 {
+    checkCommandTimeout(now);
+
     switch (state_) {
         case State::WaitVehicle:
             if (vehicle_.known) {
@@ -56,7 +76,7 @@ void FlightSequence::tick(std::chrono::steady_clock::time_point /*now*/)
             break;
         case State::Landing:
             // ArduCopter disarms by itself after touchdown
-            if (!pending_command_ && !vehicle_.armed) {
+            if (!active_command_ && !vehicle_.armed) {
                 setState(State::Done);
             }
             break;
@@ -68,21 +88,28 @@ void FlightSequence::tick(std::chrono::steady_clock::time_point /*now*/)
 void FlightSequence::onCommandAck(const mavlink_command_ack_t& ack)
 {
     // Not for us, or not the command we are waiting for
-    if (ack.target_system != own_sysid_ || !pending_command_ || ack.command != *pending_command_) {
+    if (ack.target_system != own_sysid_ || !active_command_ || ack.command != active_command_->command) {
         return;
     }
     if (ack.result == MAV_RESULT_IN_PROGRESS) {
         return;  // keep waiting for the final result
     }
+
+    if (ack.result == MAV_RESULT_TEMPORARILY_REJECTED || (state_ == State::Arming && ack.result == MAV_RESULT_FAILED)) {
+// повтор через паузу
+
+// і її варто зробити явною: окрема функція чи таблиця «команда + результат → дія», а не вкладені if по всьому onCommandAck.
+    }
+
     if (ack.result != MAV_RESULT_ACCEPTED) {
         std::printf("[seq] command %u rejected: %s\n",
                     static_cast<unsigned>(ack.command), mavlink_utils::mavResultName(ack.result));
-        pending_command_.reset();
+        active_command_.reset();
         setState(State::Failed);
         return;
     }
 
-    pending_command_.reset();
+    active_command_.reset();
     const auto next_state = nextStateOnAck(state_);
     if (next_state != std::nullopt) {
         setState(*next_state);
@@ -97,9 +124,9 @@ std::optional<FlightSequence::State> FlightSequence::nextStateOnAck(State curr_s
 
         case State::Arming:   
             return State::Takeoff;
+
         case State::Takeoff:  
             return State::Climbing;
-           
 
         case State::Landing:
             return std::nullopt;  // mode switched; tick() waits for disarm
@@ -112,6 +139,12 @@ void FlightSequence::setState(State next)
 {
     std::printf("[seq] %s -> %s\n", stateName(state_), stateName(next));
     state_ = next;
+    active_command_.reset();
+    auto now = std::chrono::steady_clock::now();
+    auto limit = stateTimeout(state_);
+    if (limit){
+        state_deadline_ = now + *limit;
+    }
 
     switch (state_) {
         case State::SetGuided:
@@ -150,9 +183,45 @@ bool FlightSequence::sendCommand(uint16_t command, const std::array<float, 7>& p
         0
     );
 
-    if (sent) {
-        pending_command_ = command;
-    }
+    active_command_ = ActiveCommand{command, params, ActiveCommand::Phase::AwaitingAck, std::chrono::steady_clock::now() + kAckTimeout, 1};
     
     return sent;
+}
+
+void FlightSequence::checkCommandTimeout(std::chrono::steady_clock::time_point now) 
+{
+    if (!active_command_) {
+        return;
+    }
+
+    if (now - active_command_->sent_at < kAckTimeout) {
+        return;
+    }
+
+     if (active_command_->attempts >= kMaxAttempts) {
+        std::printf("[seq] command %u: no ACK after %u attempts\n",
+                    static_cast<unsigned>(active_command_->command),
+                    static_cast<unsigned>(active_command_->attempts));
+        active_command_.reset();
+        setState(State::Failed);
+
+        return;
+    }
+
+     // Resend the same command; confirmation tells the receiver this is a retry
+    const uint8_t confirmation = active_command_->attempts;
+    sender_.sendCommandLong(
+        vehicle_.sysid, 
+        vehicle_.compid,
+        active_command_->command, 
+        active_command_->params, 
+        confirmation
+    );
+    active_command_->attempts++;
+    active_command_->sent_at = now;
+
+    std::printf("[seq] command %u: retry %u\n",
+                static_cast<unsigned>(active_command_->command),
+                static_cast<unsigned>(confirmation));
+
 }
