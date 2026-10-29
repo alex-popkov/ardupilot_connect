@@ -53,6 +53,10 @@ private:
     void onCommandAck(const mavlink_command_ack_t& ack);
     bool sendCommand(uint16_t command, const std::array<float, 7>& params);
     void checkCommandTimeout(std::chrono::steady_clock::time_point now);
+    void onCommandAckAccept();
+    void onCommandAckInProgress();
+    void onCommandAckRetryLater();
+    void onCommandAckFail();
 
     MavlinkSender& sender_;
     const VehicleState& vehicle_;   // read-only view, TelemetryHandler owns updates
