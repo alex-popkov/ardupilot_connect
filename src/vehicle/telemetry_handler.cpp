@@ -51,22 +51,34 @@ void TelemetryHandler::onHeartbeat(const mavlink_message_t& msg)
         return;
     }
 
+    const bool was_known = state_.known;
+
     if (!state_.known) {
         state_.sysid = msg.sysid;
         state_.compid = msg.compid;
         state_.known = true;
-    }
+    }  
+
+    const bool armed = (hb.base_mode & MAV_MODE_FLAG_SAFETY_ARMED) != 0;
+
+    // Print only when something visible changed (always print the very first heartbeat)
+    const bool changed = !was_known
+                    || hb.custom_mode != state_.custom_mode
+                    || armed != state_.armed
+                    || hb.system_status != state_.system_status;
 
     state_.custom_mode = hb.custom_mode;
-    state_.armed = (hb.base_mode & MAV_MODE_FLAG_SAFETY_ARMED) != 0;
+    state_.armed = armed;
     state_.system_status = hb.system_status;
     state_.last_heartbeat = std::chrono::steady_clock::now();
 
-    std::printf("mode %-9s | %-8s | status %s\n",
-        mavlink_utils::copterModeName(state_.custom_mode),
-        state_.armed ? "ARMED" : "DISARMED",
-        mavlink_utils::mavStateName(state_.system_status)
-    );
+    if (changed) {
+        std::printf("mode %-9s | %-8s | status %s\n",
+            mavlink_utils::copterModeName(state_.custom_mode),
+            state_.armed ? "ARMED" : "DISARMED",
+            mavlink_utils::mavStateName(state_.system_status)
+        );
+    }
 }
 
 void TelemetryHandler::onGlobalPositionInt(const mavlink_message_t& msg)

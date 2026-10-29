@@ -1,11 +1,22 @@
 #include "vehicle/flight_sequence.hpp"
 #include "mavlink/mavlink_utils.hpp"
+#include <cstdio>
 
 namespace {
+constexpr auto kAckTimeout = std::chrono::seconds(1);
+constexpr auto kRetryDelay = std::chrono::seconds(3);
+constexpr uint8_t kMaxAttempts = 3;
+using State = FlightSequence::State;
+
+enum class AckAction { 
+    Accept, 
+    InProgress, 
+    RetryLater,
+    Fail 
+};
 
 const char* stateName(FlightSequence::State s)
 {
-    using State = FlightSequence::State;
     switch (s) {
         case State::WaitVehicle: return "WAIT_VEHICLE";
         case State::SetGuided:   return "SET_GUIDED";
@@ -18,7 +29,48 @@ const char* stateName(FlightSequence::State s)
     }
     return "UNKNOWN";  // unreachable if all enumerators are handled
 }
+    // How long a state may last before the sequence gives up (none = unlimited)
+std::optional<std::chrono::seconds> stateTimeout(FlightSequence::State s)
+{
+    switch (s) {
+        case State::SetGuided:   return std::chrono::seconds(5);
+        case State::Arming:      return std::chrono::seconds(120);
+        case State::Takeoff:     return std::chrono::seconds(5);
+        case State::Climbing:    return std::chrono::seconds(30);
+        case State::Landing:     return std::chrono::seconds(60);
 
+        case State::Done:
+        case State::Failed:
+        case State::WaitVehicle: 
+            return std::nullopt;
+    }
+
+    return std::nullopt;
+}
+
+AckAction classifyAck(uint16_t command, uint8_t result)
+{
+    switch(result) {
+        case MAV_RESULT_ACCEPTED:                   
+            return AckAction::Accept;
+
+        case MAV_RESULT_IN_PROGRESS:                
+            return AckAction::InProgress;
+
+        case MAV_RESULT_TEMPORARILY_REJECTED:       
+            return AckAction::RetryLater;
+
+        case MAV_RESULT_FAILED: {
+            if(command == MAV_CMD_COMPONENT_ARM_DISARM) {
+                return AckAction::RetryLater;
+            }
+
+            return AckAction::Fail;
+        }
+           
+        default: return AckAction::Fail;
+    }
+}
 }
 
 FlightSequence::FlightSequence(
@@ -40,26 +92,52 @@ void FlightSequence::onMessage(const mavlink_message_t& msg)
     onCommandAck(ack);
 }
 
-void FlightSequence::tick(std::chrono::steady_clock::time_point /*now*/)
+void FlightSequence::tick(std::chrono::steady_clock::time_point now)
 {
+
+    if (state_deadline_ && now >= *state_deadline_) {
+        std::printf("[seq] %s timed out\n", stateName(state_));
+        setState(State::Failed);
+         
+        return;
+    }
+    checkCommandTimeout(now);
+
     switch (state_) {
         case State::WaitVehicle:
-            if (vehicle_.known) {
+         // Wait until the autopilot is found AND has finished booting
+            if (vehicle_.known && vehicle_.system_status == MAV_STATE_STANDBY) {
                 setState(State::SetGuided);
             }
             break;
+
         case State::Climbing:
             // Small tolerance: the vehicle may settle slightly below the target
             if (vehicle_.rel_alt_m >= takeoff_alt_m_ - 0.5f) {
                 setState(State::Landing);
             }
             break;
+
         case State::Landing:
             // ArduCopter disarms by itself after touchdown
-            if (!pending_command_ && !vehicle_.armed) {
+            if (!active_command_ && !vehicle_.armed) {
                 setState(State::Done);
             }
             break;
+
+        case State::SetGuided:
+            // ACK only says "accepted"; move on when the heartbeat confirms the mode
+            if (!active_command_ && vehicle_.custom_mode == COPTER_MODE_GUIDED) {
+                setState(State::Arming);
+            }
+            break;
+
+        case State::Arming:
+            if (!active_command_ && vehicle_.armed) {
+                setState(State::Takeoff);
+            }
+            break;
+
         default:
             break;
     }
@@ -68,50 +146,73 @@ void FlightSequence::tick(std::chrono::steady_clock::time_point /*now*/)
 void FlightSequence::onCommandAck(const mavlink_command_ack_t& ack)
 {
     // Not for us, or not the command we are waiting for
-    if (ack.target_system != own_sysid_ || !pending_command_ || ack.command != *pending_command_) {
-        return;
-    }
-    if (ack.result == MAV_RESULT_IN_PROGRESS) {
-        return;  // keep waiting for the final result
-    }
-    if (ack.result != MAV_RESULT_ACCEPTED) {
-        std::printf("[seq] command %u rejected: %s\n",
-                    static_cast<unsigned>(ack.command), mavlink_utils::mavResultName(ack.result));
-        pending_command_.reset();
-        setState(State::Failed);
+    if (ack.target_system != own_sysid_ || !active_command_ || ack.command != active_command_->command) {
         return;
     }
 
-    pending_command_.reset();
-    const auto next_state = nextStateOnAck(state_);
-    if (next_state != std::nullopt) {
-        setState(*next_state);
+    if (active_command_->phase == ActiveCommand::Phase::WaitingRetry) {
+        return;
     }
+
+    const AckAction ack_action = classifyAck(ack.command, ack.result);
+    switch (ack_action){
+        case AckAction::Accept: {
+            onCommandAckAccept();
+            break;
+        }
+
+        case AckAction::InProgress: {
+            onCommandAckInProgress();
+            break;
+        }
+
+        case AckAction::RetryLater: {
+            onCommandAckRetryLater();
+            std::printf("[seq] rejected: %s, retry in %lld s\n",
+                mavlink_utils::mavResultName(ack.result),
+                static_cast<long long>(kRetryDelay.count())
+            );
+            break;
+        }
+
+        case AckAction::Fail: {
+            onCommandAckFail();
+            std::printf("[seq] command %u rejected: %s\n",
+                    static_cast<unsigned>(ack.command), mavlink_utils::mavResultName(ack.result));
+
+            break;
+        }
+    }
+
+
 }
 
 std::optional<FlightSequence::State> FlightSequence::nextStateOnAck(State curr_state)
 {
     switch (curr_state) {
-        case State::SetGuided: 
-            return State::Arming;
-
-        case State::Arming:   
-            return State::Takeoff;
         case State::Takeoff:  
             return State::Climbing;
-           
 
+        case State::SetGuided: 
         case State::Landing:
+        case State::Arming:
             return std::nullopt;  // mode switched; tick() waits for disarm
         default:              
             return std::nullopt;  // ACK we did not expect in this state
     }
-};
+}
 
 void FlightSequence::setState(State next)
 {
     std::printf("[seq] %s -> %s\n", stateName(state_), stateName(next));
     state_ = next;
+    active_command_.reset();
+    const auto limit = stateTimeout(state_);
+    if (limit){
+        state_deadline_ = std::chrono::steady_clock::now() + *limit;
+    } else {
+        state_deadline_.reset();   // no limit for this state
+    }
 
     switch (state_) {
         case State::SetGuided:
@@ -150,9 +251,100 @@ bool FlightSequence::sendCommand(uint16_t command, const std::array<float, 7>& p
         0
     );
 
-    if (sent) {
-        pending_command_ = command;
-    }
+    active_command_ = ActiveCommand{command, params, ActiveCommand::Phase::AwaitingAck, std::chrono::steady_clock::now() + kAckTimeout, 1};
     
     return sent;
+}
+
+void FlightSequence::checkCommandTimeout(std::chrono::steady_clock::time_point now) 
+{
+    if (!active_command_) {
+        return;
+    }
+
+    if (now < active_command_->deadline) {
+        return;
+    }
+
+
+    switch (active_command_->phase) {
+        case ActiveCommand::Phase::AwaitingAck:{
+            if (active_command_->attempts >= kMaxAttempts) {
+                std::printf("[seq] command %u: no ACK after %u attempts\n",
+                            static_cast<unsigned>(active_command_->command),
+                            static_cast<unsigned>(active_command_->attempts));
+                setState(State::Failed);
+
+                return;
+            }
+               // Resend the same command; confirmation tells the receiver this is a retry
+            const uint8_t confirmation = active_command_->attempts;
+            sender_.sendCommandLong(
+                vehicle_.sysid, 
+                vehicle_.compid,
+                active_command_->command, 
+                active_command_->params, 
+                confirmation
+            );
+            active_command_->attempts++;
+            active_command_->deadline = now + kAckTimeout;
+
+
+            std::printf("[seq] command %u: retry waiting ack%u\n",
+                static_cast<unsigned>(active_command_->command),
+                static_cast<unsigned>(confirmation));
+
+            break;
+        }
+
+        case ActiveCommand::Phase::WaitingRetry: {
+            sender_.sendCommandLong(
+                vehicle_.sysid, 
+                vehicle_.compid,
+                active_command_->command, 
+                active_command_->params, 
+                0
+            );
+
+            active_command_->attempts = 1;
+            active_command_->deadline = now + kAckTimeout;
+            active_command_->phase = ActiveCommand::Phase::AwaitingAck;
+
+            std::printf("[seq] command %u: retrying after rejection\n",
+                static_cast<unsigned>(active_command_->command)
+            );
+
+            break;
+        }
+    }
+}
+
+void FlightSequence::onCommandAckAccept()
+{
+    active_command_.reset();
+    const auto next_state = nextStateOnAck(state_);
+    if (next_state != std::nullopt) {
+        setState(*next_state);
+    }
+}
+
+void FlightSequence::onCommandAckInProgress()
+{
+    const auto now = std::chrono::steady_clock::now();
+    active_command_->deadline = now + kAckTimeout;
+    active_command_->attempts = 0;
+}
+
+void FlightSequence::onCommandAckRetryLater()
+{
+    const auto now = std::chrono::steady_clock::now();
+    active_command_->phase = ActiveCommand::Phase::WaitingRetry;
+    active_command_->deadline = now + kRetryDelay;
+    active_command_->attempts = 0;
+}
+
+void FlightSequence::onCommandAckFail()
+{
+    active_command_.reset();
+    setState(State::Failed);
 }
