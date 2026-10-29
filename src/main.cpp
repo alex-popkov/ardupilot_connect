@@ -15,15 +15,16 @@ int main () {
         uint8_t buf[2048];
         TelemetryHandler telemetry_handler;
         MavlinkSender sender{server, kSenderSysid, MAV_COMP_ID_MISSIONPLANNER, MAVLINK_COMM_0};
-        FlightSequence flight_fequence{sender, telemetry_handler.state(), kSenderSysid, kTakeoffAltM};
+        FlightSequence flight_sequence{sender, telemetry_handler.state(), kSenderSysid, kTakeoffAltM};
 
         MavlinkParser::OnMessage msg_handler = [&](const mavlink_message_t& msg){
            telemetry_handler.onMessage(msg);
-           flight_fequence.onMessage(msg); 
+           flight_sequence.onMessage(msg); 
         };
 
         MavlinkParser parser{MAVLINK_COMM_0, std::move(msg_handler)};
-        auto nextHeartbeat = std::chrono::steady_clock::now();
+        auto next_heartbeat = std::chrono::steady_clock::now();
+        std::optional<std::chrono::steady_clock::time_point> exit_at;
         
         while(1) {
             if (server.wait_readable(100)) {
@@ -36,18 +37,24 @@ int main () {
 
                 //send heartbeat
                 const auto now = std::chrono::steady_clock::now();
-                if (now >= nextHeartbeat) {
+                if (now >= next_heartbeat) {
                     sender.sendHeartbeat();
-                    nextHeartbeat += std::chrono::seconds(1);
-                    if (now > nextHeartbeat) {
-                        nextHeartbeat = now + std::chrono::seconds(1);
+                    next_heartbeat += std::chrono::seconds(1);
+                    if (now > next_heartbeat) {
+                        next_heartbeat = now + std::chrono::seconds(1);
                     }
                 }
 
-                flight_fequence.tick(now); 
+                flight_sequence.tick(now); 
 
-                if (flight_fequence.state() == FlightSequence::State::Done ||
-                    flight_fequence.state() == FlightSequence::State::Failed) {
+                 const bool finished = flight_sequence.state() == FlightSequence::State::Done ||
+                          flight_sequence.state() == FlightSequence::State::Failed;
+
+                // Keep the loop running a bit longer to catch late STATUSTEXT messages
+                if (finished && !exit_at) {
+                    exit_at = now + std::chrono::seconds(2);
+                }
+                if (exit_at && now >= *exit_at) {
                     break;
                 }
             }

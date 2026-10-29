@@ -34,7 +34,7 @@ std::optional<std::chrono::seconds> stateTimeout(FlightSequence::State s)
 {
     switch (s) {
         case State::SetGuided:   return std::chrono::seconds(5);
-        case State::Arming:      return std::chrono::seconds(60);
+        case State::Arming:      return std::chrono::seconds(120);
         case State::Takeoff:     return std::chrono::seconds(5);
         case State::Climbing:    return std::chrono::seconds(30);
         case State::Landing:     return std::chrono::seconds(60);
