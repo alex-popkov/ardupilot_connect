@@ -183,8 +183,6 @@ void FlightSequence::onCommandAck(const mavlink_command_ack_t& ack)
             break;
         }
     }
-
-
 }
 
 std::optional<FlightSequence::State> FlightSequence::nextStateOnAck(State curr_state)
