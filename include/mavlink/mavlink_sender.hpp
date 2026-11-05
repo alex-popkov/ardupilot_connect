@@ -22,6 +22,9 @@ public:
     const std::array<float, 7>& params,
     uint8_t confirmation = 0
   );
+  uint8_t sysid() const {
+      return sysid_;
+  }
   
 private:
   bool sendMessage(const mavlink_message_t& msg);   // серіалізувати + transport.send

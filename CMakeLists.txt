@@ -18,6 +18,7 @@ add_library(mav_listener_lib
     src/mavlink/mavlink_parser.cpp
     src/mavlink/mavlink_sender.cpp
     src/mavlink/mavlink_utils.cpp
+    src/mavlink/command_client.cpp
     src/vehicle/telemetry_handler.cpp
     src/vehicle/flight_sequence.cpp
 )

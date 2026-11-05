@@ -15,11 +15,12 @@ int main () {
         uint8_t buf[2048];
         TelemetryHandler telemetry_handler;
         MavlinkSender sender{server, kSenderSysid, MAV_COMP_ID_MISSIONPLANNER, MAVLINK_COMM_0};
-        FlightSequence flight_sequence{sender, telemetry_handler.state(), kSenderSysid, kTakeoffAltM};
+        CommandClient command_client{sender, telemetry_handler.state()};
+        FlightSequence flight_sequence{command_client, telemetry_handler.state(), kTakeoffAltM};
 
         MavlinkParser::OnMessage msg_handler = [&](const mavlink_message_t& msg){
            telemetry_handler.onMessage(msg);
-           flight_sequence.onMessage(msg); 
+           command_client.onMessage(msg); 
         };
 
         MavlinkParser parser{MAVLINK_COMM_0, std::move(msg_handler)};
@@ -35,7 +36,8 @@ int main () {
                     parser.feed({buf, n});
                 }
 
-                //send heartbeat
+                //send heartbeat 
+                //TODO: move send heartbeat to the mission logic
                 const auto now = std::chrono::steady_clock::now();
                 if (now >= next_heartbeat) {
                     sender.sendHeartbeat();
@@ -45,6 +47,8 @@ int main () {
                     }
                 }
 
+
+                command_client.tick(now);
                 flight_sequence.tick(now); 
 
                  const bool finished = flight_sequence.state() == FlightSequence::State::Done ||
