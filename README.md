@@ -21,11 +21,13 @@ Along the way it:
 - Keeps the vehicle's state in a `VehicleState` struct (mode, armed flag, system status, position, relative altitude, climb rate)
 - Prints `STATUSTEXT` messages from the autopilot with their severity, so the reason behind every refusal is visible
 - Identifies itself as a GCS with its own 1 Hz `HEARTBEAT` (`sysid 254`)
-- Drives the flight with a state machine that:
-  - waits until the autopilot has finished booting (`MAV_STATE_STANDBY`) before sending anything
+- Delivers commands reliably through a dedicated `CommandClient` that:
   - resends a command if no `COMMAND_ACK` arrives (with the `confirmation` counter), and gives up after a few silent attempts
   - retries temporarily refused commands after a pause — e.g. arming while the EKF and GPS are still initialising
   - fails fast on refusals that will not change (`DENIED`, `UNSUPPORTED`, ...)
+  - reports a single final result: accepted, rejected or no reply
+- Drives the flight with a state machine that:
+  - waits until the autopilot has finished booting (`MAV_STATE_STANDBY`) before sending anything
   - confirms each step through telemetry, not just the ACK (e.g. waits for the heartbeat to show GUIDED / ARMED)
   - bounds every step with its own time limit
 - Keeps reading for a couple of seconds after finishing, so late `STATUSTEXT` messages are not lost
@@ -39,12 +41,12 @@ mode STABILIZE | DISARMED | status STANDBY
 [seq] WAIT_VEHICLE -> SET_GUIDED
 mode GUIDED    | DISARMED | status STANDBY
 [seq] SET_GUIDED -> ARMING
-[seq] rejected: FAILED, retry in 3 s
+[cmd] rejected: FAILED, retry in 3 s
 [autopilot sev=CRITICAL] Arm: EKF attitude is bad
 ...
 [autopilot sev=CRITICAL] Arm: Need Position Estimate
 [autopilot sev=INFO] EKF3 IMU0 is using GPS
-[seq] command 400: retrying after rejection
+[cmd] command 400: retrying after rejection
 [autopilot sev=INFO] Arming motors
 mode GUIDED    | ARMED    | status STANDBY
 [seq] ARMING -> TAKEOFF
@@ -56,6 +58,8 @@ mode LAND      | ARMED    | status ACTIVE
 mode LAND      | DISARMED | status STANDBY
 [seq] LANDING -> DONE
 ```
+
+`[seq]` lines come from the flight state machine, `[cmd]` lines from command delivery, `[autopilot]` lines are `STATUSTEXT` messages from ArduPilot.
 
 ---
 
@@ -70,27 +74,38 @@ mode LAND      | DISARMED | status STANDBY
             │  MavlinkParser   │  byte-by-byte framing via mavlink_parse_char
             └────────┬─────────┘
                      │ mavlink_message_t
-          ┌──────────┴───────────┐
-┌─────────▼────────┐   ┌─────────▼────────┐
-│ TelemetryHandler │   │  FlightSequence  │  state machine: reacts to COMMAND_ACK
-│ → VehicleState   │──►│  (reads state)   │  and to telemetry, owns retries/timeouts
-└──────────────────┘   └─────────┬────────┘
-                                 │ commands
-                       ┌─────────▼────────┐
-                       │  MavlinkSender   │  pack HEARTBEAT / COMMAND_LONG, serialize, send
-                       └──────────────────┘
+          ┌──────────┴──────────────────────┐
+┌─────────▼────────┐                ┌───────▼──────────┐
+│ TelemetryHandler │                │  CommandClient   │  COMMAND_ACK matching, resend on
+│ → VehicleState   │                │                  │  silence, retry policy, final result
+└─────────┬────────┘                └───────▲──┬───────┘
+          │ const VehicleState&     send()  │  │ takeResult()
+          │                         cancel()│  │
+          │                         ┌───────┴──▼───────┐
+          └────────────────────────►│  FlightSequence  │  scenario: states, step deadlines,
+                                    │                  │  telemetry-driven transitions
+                                    └──────────────────┘
+                                    CommandClient ──► MavlinkSender ──► UdpServer
+                                                      pack HEARTBEAT / COMMAND_LONG, serialize, send
 ```
 
-`main` only wires the pieces together: it receives, feeds each message to `TelemetryHandler` (first) and `FlightSequence`, runs the heartbeat timer and calls `FlightSequence::tick()` on every loop iteration.
+`main` only wires the pieces together. On every loop iteration it:
+
+1. receives bytes and feeds each parsed message to `TelemetryHandler` (first) and `CommandClient`
+2. runs the 1 Hz heartbeat timer
+3. calls `CommandClient::tick()` (timeouts and retries) and then `FlightSequence::tick()` (picks up command results, checks telemetry, moves the scenario on)
 
 Design notes:
 
 - **The transport knows nothing about MAVLink, and the parser knows nothing about UDP.** The same parser is meant to work unchanged on a serial stream later.
 - **The parser is fed bytes, not packets.** A message split across reads (typical for UART) or several messages in one datagram are both handled.
-- **Telemetry is state; `COMMAND_ACK` is a reply.** `TelemetryHandler` builds the model of the vehicle that anyone can read. Acknowledgements only make sense to whoever sent the command, so they are handled by the state machine.
-- **One place changes the state.** `FlightSequence::setState()` is the only function that assigns the state; it also clears the active command, sets the step's deadline and performs the entry action (sending the step's command).
-- **Two kinds of transitions.** Some steps finish on a `COMMAND_ACK`, others on telemetry (`tick()` checks mode, armed flag, altitude). Steps whose effect can be observed are confirmed by telemetry.
-- **Invalid states are unrepresentable.** The active command is a single `std::optional<ActiveCommand>` with an explicit phase (`AwaitingAck` / `WaitingRetry`) and one `deadline`, instead of several loosely related fields.
+- **Telemetry is state; `COMMAND_ACK` is a reply.** `TelemetryHandler` builds the model of the vehicle that anyone can read. Acknowledgements only make sense to whoever sent the command, so they go to `CommandClient`.
+- **Scenario and delivery are separate.** `FlightSequence` decides *which* command to send and *when*; `CommandClient` decides *how* to get it delivered and acknowledged. Retries, `IN_PROGRESS` and temporary refusals never reach the state machine — it only sees the final `Result { Accepted | Rejected | NoReply }`.
+- **Results are polled, not pushed.** The client stores the final result and `FlightSequence::tick()` collects it with `takeResult()`. No callbacks means no re-entrancy: the client never calls back into the state machine while it is still updating its own state.
+- **One command at a time, explicitly.** `CommandClient::send()` is `[[nodiscard]]` and returns `false` if a command is already active, instead of silently replacing it. The state machine also checks that a result belongs to the command it is waiting for.
+- **One place changes the state.** `FlightSequence::setState()` is the only function that assigns the state; it cancels the previous command, sets the step's deadline and performs the entry action (sending the step's command).
+- **Two kinds of transitions.** Some steps finish when their command is accepted, others on telemetry (`tick()` checks mode, armed flag, altitude). Steps whose effect can be observed are confirmed by telemetry.
+- **Invalid states are unrepresentable.** Inside the client the active command is a single `std::optional<ActiveCommand>` with an explicit phase (`AwaitingAck` / `WaitingRetry`) and one `deadline`, instead of several loosely related fields.
 - **Retry policy is a pure function.** `classifyAck(command, result)` maps an ACK to `Accept / InProgress / RetryLater / Fail` in one place.
 - **One link = one MAVLink channel.** The parser and the sender for the same link share a channel (`MAVLINK_COMM_0`), which keeps the incoming parse state and the outgoing `seq` counter per link.
 - **The UDP socket is a server.** MAVProxy's `--out=udp:host:port` *sends* to us, so we `bind()` and reply to whoever wrote last.
@@ -111,16 +126,17 @@ Design notes:
 | `LANDING` | `MAV_CMD_DO_SET_MODE` (LAND) | ACK accepted **and** vehicle disarmed |
 | `DONE` / `FAILED` | — | terminal |
 
-Command handling:
+Command handling (inside `CommandClient`):
 
 | Situation | Reaction |
 |---|---|
-| no ACK within 1 s | resend with `confirmation + 1`; `FAILED` after 3 silent attempts |
-| `ACCEPTED` | stop waiting; move on (or let telemetry confirm the step) |
+| no ACK within 1 s | resend with `confirmation + 1`; result `NoReply` after 3 silent attempts |
+| `ACCEPTED` | result `Accepted` |
 | `IN_PROGRESS` | keep waiting, extend the deadline |
 | `TEMPORARILY_REJECTED`, or `FAILED` for arming | retry after 3 s |
-| anything else | `FAILED` |
-| any step exceeds its time limit | `FAILED` |
+| anything else | result `Rejected` |
+
+The state machine treats `Rejected` and `NoReply` as `FAILED`, and so is any step that exceeds its time limit.
 
 ---
 
@@ -136,6 +152,7 @@ ardupilot_connect/
 │   ├── mavlink/
 │   │   ├── mavlink_parser.hpp      # bytes → mavlink_message_t
 │   │   ├── mavlink_sender.hpp      # HEARTBEAT, COMMAND_LONG
+│   │   ├── command_client.hpp      # reliable delivery of one command, final result
 │   │   └── mavlink_utils.hpp       # enum → string helpers for logging
 │   └── vehicle/
 │       ├── vehicle_state.hpp       # VehicleState struct
@@ -148,6 +165,7 @@ ardupilot_connect/
     ├── mavlink/
     │   ├── mavlink_parser.cpp
     │   ├── mavlink_sender.cpp
+    │   ├── command_client.cpp
     │   └── mavlink_utils.cpp
     └── vehicle/
         ├── telemetry_handler.cpp
@@ -241,8 +259,8 @@ A 21-byte packet from port 14551 once per second is this program's own heartbeat
 - [x] Flight sequence as a state machine: GUIDED → ARM → TAKEOFF → climb → LAND → disarmed
 - [x] Command tracking with timeouts, retries (`confirmation` field) and per-result policy
 - [x] Per-step time limits; steps confirmed by telemetry
-- [ ] `CommandClient`: move command sending, ACK matching and retries out of `FlightSequence`
-- [ ] Unit tests for `classifyAck` and the state machine (no network needed)
+- [x] `CommandClient`: command sending, ACK matching and retries moved out of `FlightSequence`
+- [ ] Unit tests for `classifyAck`, `CommandClient` and the state machine (no network needed) — needs a sender interface and time passed in explicitly
 - [ ] `ATTITUDE` decoding
 - [ ] Heartbeat-loss detection based on `last_heartbeat`
 - [ ] Multi-waypoint flight in GUIDED (`SET_POSITION_TARGET_GLOBAL_INT`) or via the mission protocol
@@ -277,6 +295,8 @@ A 21-byte packet from port 14551 once per second is this program's own heartbeat
 - A periodic timer advanced with `next += period` bursts to "catch up" after a long pause — reset it when it falls behind.
 - Passing a whole array to `std::span` instead of `{buf, n}` silently feeds stale bytes to the parser.
 - Fields that depend on the current state must be assigned on *every* state entry, including the "no value" branch.
+- Class members are initialised in **declaration order**, not in the order of the constructor's initialiser list (`-Wreorder-ctor`). Keep both in the same order.
+- `optional->reset()` calls `reset()` on the *contained* object; to empty the `optional` itself use `optional.reset()`.
 
 ---
 
