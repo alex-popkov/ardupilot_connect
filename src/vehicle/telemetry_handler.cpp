@@ -73,7 +73,7 @@ void TelemetryHandler::onHeartbeat(const mavlink_message_t& msg)
     state_.last_heartbeat = std::chrono::steady_clock::now();
 
     if (changed) {
-        std::printf("mode %-9s | %-8s | status %s\n",
+        std::printf("drone heartbeat: mode %-9s | %-8s | status %s\n",
             mavlink_utils::copterModeName(state_.custom_mode),
             state_.armed ? "ARMED" : "DISARMED",
             mavlink_utils::mavStateName(state_.system_status)

@@ -51,14 +51,6 @@ bool CommandClient::send(uint16_t command, const std::array<float, 7>& params)
     return false;   // one command at a time
   }
 
-  sender_.sendCommandLong(
-    vehicle_.sysid,
-    vehicle_.compid,
-    command,
-    params,
-    0
-  );
-
   active_command_ = ActiveCommand{command, params, ActiveCommand::Phase::AwaitingAck, std::chrono::steady_clock::now() + kAckTimeout, 1};
   transmit(0);
 
@@ -99,6 +91,10 @@ void CommandClient::tick(std::chrono::steady_clock::time_point now)
         transmit(active_command_->attempts); // retransmission, confirmation = attempts
         ++active_command_->attempts;
         active_command_->deadline = now + kAckTimeout;
+        std::printf("[cmd] command %u: no ACK, resend %u\n",
+                        static_cast<unsigned>(active_command_->command),
+                        static_cast<unsigned>(active_command_->attempts));
+
         break;
 
       case ActiveCommand::Phase::WaitingRetry:
@@ -106,6 +102,9 @@ void CommandClient::tick(std::chrono::steady_clock::time_point now)
         active_command_->attempts = 1;
         active_command_->phase = ActiveCommand::Phase::AwaitingAck;
         active_command_->deadline = now + kAckTimeout;
+        std::printf("[cmd] command %u: retrying after rejection\n",
+                        static_cast<unsigned>(active_command_->command));
+
         break;
     }
 }
@@ -125,7 +124,8 @@ void CommandClient::transmit(uint8_t confirmation)
       vehicle_.compid,
       active_command_->command,
       active_command_->params,
-      confirmation);
+      confirmation
+    );
 }
 
 void CommandClient::finish(CommandClient::Result::Kind kind, uint8_t mav_result)
@@ -164,7 +164,7 @@ void CommandClient::onCommandAck(const mavlink_command_ack_t& ack)
 
         case AckAction::RetryLater: {
             onCommandAckRetryLater();
-            std::printf("[seq] rejected: %s, retry in %lld s\n",
+            std::printf("[cmd] rejected: %s, retry in %lld s\n",
                 mavlink_utils::mavResultName(ack.result),
                 static_cast<long long>(kRetryDelay.count())
             );
@@ -173,7 +173,7 @@ void CommandClient::onCommandAck(const mavlink_command_ack_t& ack)
 
         case AckAction::Fail: {
             onCommandAckFail(ack.result);
-            std::printf("[seq] command %u rejected: %s\n",
+            std::printf("[cmd] command %u rejected: %s\n",
                     static_cast<unsigned>(ack.command), mavlink_utils::mavResultName(ack.result));
 
             break;
