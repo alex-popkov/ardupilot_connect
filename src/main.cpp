@@ -10,8 +10,7 @@ int main()
     const uint16_t kServerPort = 14551;
     const uint8_t kSenderSysid = 254;
     const float kTakeoffAltM = 10.0f;
-    try 
-    {
+    try {
         UdpServer server(kServerPort);
         uint8_t buf[2048];
         TelemetryHandler telemetry_handler;
