@@ -1,9 +1,9 @@
 #pragma once
+#include <ardupilotmega/mavlink.h>
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <optional>
-#include <ardupilotmega/mavlink.h>
 
 #include "mavlink/mavlink_sender.hpp"
 #include "vehicle/vehicle_state.hpp"
@@ -13,11 +13,7 @@
 class CommandClient {
 public:
     struct Result {
-        enum class Kind { 
-            Accepted, 
-            Rejected,
-            NoReply 
-        };
+        enum class Kind { Accepted, Rejected, NoReply };
         Kind kind;
         uint16_t command;
         uint8_t mav_result; // MAV_RESULT_*; not meaningful for NoReply
@@ -32,11 +28,9 @@ public:
     void cancel();
 
     // True while a command is in flight or waiting for a retry
-    bool busy() const { 
-        return active_command_.has_value(); 
-    }
+    bool busy() const { return active_command_.has_value(); }
 
-    void onMessage(const mavlink_message_t& msg); // COMMAND_ACK
+    void onMessage(const mavlink_message_t& msg);         // COMMAND_ACK
     void tick(std::chrono::steady_clock::time_point now); // timeouts and retries
 
     // Final result of the last command; returned once, then empty
@@ -44,10 +38,7 @@ public:
 
 private:
     struct ActiveCommand {
-        enum class Phase {
-            AwaitingAck,
-            WaitingRetry
-        };
+        enum class Phase { AwaitingAck, WaitingRetry };
         uint16_t command;
         std::array<float, 7> params;
         Phase phase;
@@ -55,7 +46,7 @@ private:
         uint8_t attempts;
     };
 
-    void transmit(uint8_t confirmation); // send active_ to the vehicle
+    void transmit(uint8_t confirmation);                // send active_ to the vehicle
     void finish(Result::Kind kind, uint8_t mav_result); // store result, clear active_
     void onCommandAck(const mavlink_command_ack_t& ack);
     void onCommandAckAccept(uint8_t result);

@@ -1,0 +1,32 @@
+#!/bin/sh
+# Abort the commit if any staged C++ file is not clang-formatted.
+# Checks the STAGED version of each file (the index), not the working copy.
+
+files=$(git diff --cached --name-only --diff-filter=ACMR -- '*.cpp' '*.hpp' '*.h')
+[ -z "$files" ] && exit 0
+
+if ! command -v clang-format >/dev/null 2>&1; then
+    echo "pre-commit: clang-format not found (brew install clang-format)" >&2
+    exit 1
+fi
+
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+bad=""
+for f in $files; do
+    git show ":$f" > "$tmpdir/orig"
+    clang-format --assume-filename="$f" < "$tmpdir/orig" > "$tmpdir/formatted"
+    if ! cmp -s "$tmpdir/orig" "$tmpdir/formatted"; then
+        bad="$bad $f"
+    fi
+done
+
+if [ -n "$bad" ]; then
+    echo "pre-commit: these files are not formatted:" >&2
+    for f in $bad; do echo "  $f" >&2; done
+    echo "" >&2
+    echo "Fix with:  clang-format -i$bad && git add$bad" >&2
+    exit 1
+fi
+exit 0

@@ -1,25 +1,25 @@
 #pragma once
-#include <cstdint>
 #include <cstddef>
-#include <string>
+#include <cstdint>
 #include <netinet/in.h>
+#include <string>
 
 class UdpServer {
 public:
-  explicit UdpServer(uint16_t port, const std::string& bindAddr = "0.0.0.0");
-  ~UdpServer();
-  UdpServer(const UdpServer&) = delete;  
-  UdpServer& operator=(const UdpServer&) = delete;
-  UdpServer& operator=(UdpServer&&) = delete;
+    explicit UdpServer(uint16_t port, const std::string& bindAddr = "0.0.0.0");
+    ~UdpServer();
+    UdpServer(const UdpServer&) = delete;
+    UdpServer& operator=(const UdpServer&) = delete;
+    UdpServer& operator=(UdpServer&&) = delete;
 
-  bool send(const uint8_t* buf, size_t byteCount);
-  size_t recv(uint8_t* buf, size_t maxByteCount);
-  bool wait_readable(int timeoutMs);
+    bool send(const uint8_t* buf, size_t byteCount);
+    size_t recv(uint8_t* buf, size_t maxByteCount);
+    bool wait_readable(int timeoutMs);
 
 private:
-  [[noreturn]] void fail_and_close(const char* what);
+    [[noreturn]] void fail_and_close(const char* what);
 
-  int fd{-1};
-  sockaddr_in peer{};
-  bool has_peer{false};
+    int fd{-1};
+    sockaddr_in peer{};
+    bool has_peer{false};
 };

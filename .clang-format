@@ -1,0 +1,29 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: c++20
+
+IndentWidth: 4
+ColumnLimit: 100
+PointerAlignment: Left            # uint8_t* buf, const T& x
+
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterFunction: true             # function body brace on its own line
+  AfterClass: false
+  AfterStruct: false
+  AfterEnum: false
+  AfterNamespace: false
+  AfterControlStatement: Never    # if (...) {
+
+AllowShortFunctionsOnASingleLine: Inline   # one-line getters inside classes only
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: true    # case X: return "X";
+
+AccessModifierOffset: -4          # public:/private: at class indentation
+IndentCaseLabels: true
+NamespaceIndentation: None
+
+SortIncludes: CaseSensitive
+IncludeBlocks: Preserve           # keep your blank-line groups of includes

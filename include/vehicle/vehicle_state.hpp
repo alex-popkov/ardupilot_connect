@@ -1,6 +1,6 @@
 #pragma once
-#include <chrono>    // std::chrono::steady_clock
-#include <cstdint>   // uint8_t, uint32_t
+#include <chrono>  // std::chrono::steady_clock
+#include <cstdint> // uint8_t, uint32_t
 
 struct VehicleState {
     bool known = false;
@@ -15,7 +15,7 @@ struct VehicleState {
 
     // GLOBAL_POSITION_INT
     bool has_position = false;
-    double lat = 0, lon = 0;       // degrees
-    double rel_alt_m = 0;            // metres
+    double lat = 0, lon = 0; // degrees
+    double rel_alt_m = 0;    // metres
     double climb_rate_mps = 0;
 };
